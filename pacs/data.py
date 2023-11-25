@@ -14,7 +14,7 @@ ENVS = [
     'photo',
     'sketch'
 ]
-N_ENVS = len(ENVS)
+N_ENVS = len(ENVS) - 1 # Don't count test env
 
 
 class PACSDataset(Dataset):
