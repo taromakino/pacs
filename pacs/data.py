@@ -18,12 +18,21 @@ N_ENVS = len(ENVS) - 1 # Don't count test env
 
 
 class PACSDataset(Dataset):
-    def __init__(self, df):
+    def __init__(self, df, is_train):
         self.df = df
-        self.transforms = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor()
-        ])
+        if is_train:
+            self.transforms = transforms.Compose([
+                transforms.RandomResizedCrop(224, scale=(0.7, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(0.3, 0.3, 0.3, 0.3),
+                transforms.RandomGrayscale(),
+                transforms.ToTensor()
+            ])
+        else:
+            self.transforms = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor()
+            ])
 
     def __len__(self):
         return len(self.df)
@@ -89,7 +98,8 @@ def make_data(test_env, train_ratio, batch_size, eval_batch_size, n_workers, n_e
         df_val = subsample(rng, df_val, n_eval_examples)
         df_test = subsample(rng, df_test, n_eval_examples)
 
-    data_train = DataLoader(PACSDataset(df_train), shuffle=True, pin_memory=True, batch_size=batch_size, num_workers=n_workers)
-    data_val = DataLoader(PACSDataset(df_val), pin_memory=True, batch_size=eval_batch_size, num_workers=n_workers)
-    data_test = DataLoader(PACSDataset(df_test), pin_memory=True, batch_size=eval_batch_size, num_workers=n_workers)
+    data_train = DataLoader(PACSDataset(df_train, True), shuffle=True, pin_memory=True, batch_size=batch_size,
+        num_workers=n_workers)
+    data_val = DataLoader(PACSDataset(df_val, False), pin_memory=True, batch_size=eval_batch_size, num_workers=n_workers)
+    data_test = DataLoader(PACSDataset(df_test, False), pin_memory=True, batch_size=eval_batch_size, num_workers=n_workers)
     return data_train, data_val, data_test

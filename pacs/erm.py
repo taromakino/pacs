@@ -29,7 +29,7 @@ class ERMBase(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         y_pred, y = self(*batch)
-        loss = F.binary_cross_entropy_with_logits(y_pred, y.float())
+        loss = F.cross_entropy(y_pred, y)
         self.log('val_loss', loss, on_step=False, on_epoch=True)
         self.val_acc.update(y_pred, y)
 
@@ -52,12 +52,12 @@ class ERM_X(ERMBase):
         super().__init__(lr, weight_decay)
         self.save_hyperparameters()
         self.cnn = CNN()
-        self.mlp = MLP(IMG_EMBED_SIZE, h_sizes, 1)
+        self.mlp = MLP(IMG_EMBED_SIZE, h_sizes, N_CLASSES)
 
     def forward(self, x, y, e):
         batch_size = len(x)
         x = self.cnn(x).view(batch_size, -1)
-        y_pred = self.mlp(x).view(-1)
+        y_pred = self.mlp(x)
         return y_pred, y
 
 

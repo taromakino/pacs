@@ -5,14 +5,14 @@ import torch.distributions as D
 import torch.nn as nn
 import torch.nn.functional as F
 from data import N_CLASSES, N_ENVS
-from densenet_encoder import DenseNet as CNN
-from densenet_decoder import DenseNet as DCNN
+from cnn import CNN
+from dcnn import DCNN
 from torch.optim import Adam
 from torchmetrics import Accuracy
 from utils.nn_utils import MLP, one_hot, arr_to_cov
 
 
-IMG_EMBED_SHAPE = (24, 7, 7)
+IMG_EMBED_SHAPE = (1024, 1, 1)
 IMG_EMBED_SIZE = np.prod(IMG_EMBED_SHAPE)
 
 

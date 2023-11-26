@@ -112,7 +112,7 @@ class _Transition(nn.Sequential):
         self.pool = nn.ConvTranspose2d(num_output_features, num_output_features, 2, stride=2)
 
 
-class DenseNet(nn.Module):
+class DCNN(nn.Module):
     r"""Densenet-BC model class, based on
     `"Densely Connected Convolutional Networks" <https://arxiv.org/pdf/1608.06993.pdf>`_.
 
@@ -142,7 +142,7 @@ class DenseNet(nn.Module):
 
         # First convolution
         self.features = nn.Sequential()
-        self.features.add_module("tconv0", nn.ConvTranspose2d(num_init_features, num_init_features, 2, stride=2))
+        self.features.add_module("tconv0", nn.ConvTranspose2d(1024, num_init_features, 14))
 
         # Each denseblock
         num_features = num_init_features
