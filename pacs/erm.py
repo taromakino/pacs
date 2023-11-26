@@ -20,7 +20,6 @@ class ERMBase(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         y_pred, y = self(*batch)
         loss = F.cross_entropy(y_pred, y)
-        self.train_acc.update(y_pred, y)
         return loss
 
     def validation_step(self, batch, batch_idx):
