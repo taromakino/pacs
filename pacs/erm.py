@@ -14,7 +14,6 @@ class ERMBase(pl.LightningModule):
         self.save_hyperparameters()
         self.lr = lr
         self.weight_decay = weight_decay
-        self.train_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.val_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
@@ -23,9 +22,6 @@ class ERMBase(pl.LightningModule):
         loss = F.cross_entropy(y_pred, y)
         self.train_acc.update(y_pred, y)
         return loss
-
-    def on_train_epoch_end(self):
-        self.log('train_metric', self.train_acc.compute())
 
     def validation_step(self, batch, batch_idx):
         y_pred, y = self(*batch)
