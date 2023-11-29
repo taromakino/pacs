@@ -1,21 +1,29 @@
-import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
+import torchvision.transforms as transforms
 from data import N_CLASSES
-from utils.nn_utils import MLP
-from vae import IMG_EMBED_SIZE, CNN
 from torch.optim import Adam
 from torchmetrics import Accuracy
+from torchvision.models import resnet50
 
 
-class ERMBase(pl.LightningModule):
+class ERM(pl.LightningModule):
     def __init__(self, lr, weight_decay):
         super().__init__()
         self.save_hyperparameters()
         self.lr = lr
         self.weight_decay = weight_decay
+        self.resnet = resnet50(weights='IMAGENET1K_V1')
+        self.resnet.fc = nn.Linear(2048, N_CLASSES)
+        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.val_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
+
+    def forward(self, x, y, e):
+        x = self.normalize(x)
+        y_pred = self.resnet(x)
+        return y_pred, y
 
     def training_step(self, batch, batch_idx):
         y_pred, y = self(*batch)
@@ -41,29 +49,3 @@ class ERMBase(pl.LightningModule):
 
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
-
-
-class ERM_X(ERMBase):
-    def __init__(self, h_sizes, lr, weight_decay):
-        super().__init__(lr, weight_decay)
-        self.save_hyperparameters()
-        self.cnn = CNN()
-        self.mlp = MLP(IMG_EMBED_SIZE, h_sizes, N_CLASSES)
-
-    def forward(self, x, y, e):
-        batch_size = len(x)
-        x = self.cnn(x).view(batch_size, -1)
-        y_pred = self.mlp(x)
-        return y_pred, y
-
-
-class ERM_ZC(ERMBase):
-    def __init__(self, z_size, h_sizes, lr, weight_decay):
-        super().__init__(lr, weight_decay)
-        self.save_hyperparameters()
-        self.mlp = MLP(z_size, h_sizes, 1)
-
-    def forward(self, z, y, e):
-        z_c, z_s = torch.chunk(z, 2, dim=1)
-        y_pred = self.mlp(z_c).view(-1)
-        return y_pred, y
