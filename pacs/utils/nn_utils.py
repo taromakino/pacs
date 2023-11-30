@@ -7,7 +7,15 @@ from torch.utils.data import DataLoader, TensorDataset
 COV_OFFSET = 1e-6
 
 
-class ResidualLayer(nn.Module):
+class Identity(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return x
+
+
+class SkipLinear(nn.Module):
     def __init__(self, input_size, output_size):
         super().__init__()
         self.linear = nn.Linear(input_size, output_size)
@@ -17,13 +25,13 @@ class ResidualLayer(nn.Module):
         return F.leaky_relu(self.linear(x)) + self.shortcut(x)
 
 
-class ResidualMLP(nn.Module):
+class SkipMLP(nn.Module):
     def __init__(self, input_size, h_sizes, output_size):
         super().__init__()
         module_list = []
         last_size = input_size
         for h_size in h_sizes:
-            module_list.append(ResidualLayer(last_size, h_size))
+            module_list.append(SkipLinear(last_size, h_size))
             last_size = h_size
         module_list.append(nn.Linear(last_size, output_size))
 

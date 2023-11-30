@@ -33,7 +33,7 @@ def make_model(args):
     is_train = args.eval_stage is None
     if args.task == Task.ERM:
         if is_train:
-            return ERM(args.lr, args.weight_decay)
+            return ERM(args.lr, args.weight_decay, args.dropout_prob)
         else:
             return ERM.load_from_checkpoint(ckpt_fpath(args, args.task))
     elif args.task == Task.VAE:
@@ -107,6 +107,7 @@ if __name__ == '__main__':
     parser.add_argument('--init_sd', type=float, default=0.01)
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--weight_decay', type=float, default=1e-5)
+    parser.add_argument('--dropout_prob', type=float, default=0.5)
     parser.add_argument('--lr_infer', type=float, default=1)
     parser.add_argument('--n_infer_steps', type=int, default=200)
     main(parser.parse_args())
