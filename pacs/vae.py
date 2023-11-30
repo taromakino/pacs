@@ -221,9 +221,10 @@ class VAE(pl.LightningModule):
         batch_size = len(x)
         y = torch.full((batch_size,), y_value, dtype=torch.long, device=self.device)
         e = torch.full((batch_size,), e_value, dtype=torch.long, device=self.device)
+        x_embed = self.normalize(x)
         pre_pools = dict()
-        pre_pools[f'layer_0'] = x
-        x_embed = self.input_block(x)
+        pre_pools[f'layer_0'] = x_embed
+        x_embed = self.input_block(x_embed)
         pre_pools[f'layer_1'] = x_embed
         x_embed = self.input_pool(x_embed)
 
@@ -233,13 +234,15 @@ class VAE(pl.LightningModule):
                 continue
             pre_pools[f'layer_{i}'] = x_embed
 
+        x_embed = self.conv(x_embed) # (2048, 7, 7) -> (2048, 3, 3)
         x_embed = self.avgpool(x_embed).flatten(start_dim=1)
         return nn.Parameter(self.posterior(x_embed, y, e).loc.detach())
 
     def classify_loss(self, x, y, e, z):
+        x_embed = self.normalize(x)
         pre_pools = dict()
-        pre_pools[f'layer_0'] = x
-        x_embed = self.input_block(x)
+        pre_pools[f'layer_0'] = x_embed
+        x_embed = self.input_block(x_embed)
         pre_pools[f'layer_1'] = x_embed
         x_embed = self.input_pool(x_embed)
 
@@ -249,6 +252,7 @@ class VAE(pl.LightningModule):
                 continue
             pre_pools[f'layer_{i}'] = x_embed
 
+        x_embed = self.conv(x_embed)  # (2048, 7, 7) -> (2048, 3, 3)
         x_embed = self.avgpool(x_embed).flatten(start_dim=1)
 
         # log q(z|x,y,e)
@@ -259,7 +263,8 @@ class VAE(pl.LightningModule):
         y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y, reduction='none')
 
-        x_embed = self.unpool(z).reshape(-1, 2048, 7, 7)
+        x_embed = self.unpool(z).reshape(-1, 2048, 3, 3)
+        x_embed = self.tconv(x_embed)  # (2048, 3, 3) -> (2048, 7, 7)
         for i, block in enumerate(self.up_blocks, 1):
             key = f'layer_{UNET_DEPTH - 1 - i}'
             x_embed = block(x_embed, pre_pools[key])
