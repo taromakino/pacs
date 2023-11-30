@@ -85,19 +85,6 @@ class Prior(nn.Module):
         return D.MultivariateNormal(mu, cov)
 
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, padding=1, kernel_size=3, stride=1):
-        super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, padding=padding, kernel_size=kernel_size, stride=stride)
-        self.bn = nn.BatchNorm2d(out_channels)
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x = F.leaky_relu(x)
-        return x
-
-
 class UpBlock(nn.Module):
     def __init__(self, in_channels, out_channels, up_conv_in_channels=None, up_conv_out_channels=None):
         super().__init__()
@@ -106,14 +93,14 @@ class UpBlock(nn.Module):
         if up_conv_out_channels is None:
             up_conv_out_channels = out_channels
         self.upsample = nn.ConvTranspose2d(up_conv_in_channels, up_conv_out_channels, kernel_size=2, stride=2)
-        self.conv_block_1 = ConvBlock(in_channels, out_channels)
-        self.conv_block_2 = ConvBlock(out_channels, out_channels)
+        self.conv_1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.conv_2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
 
     def forward(self, up_x, down_x):
         x = self.upsample(up_x)
         x = torch.cat([x, down_x], 1)
-        x = self.conv_block_1(x)
-        x = self.conv_block_2(x)
+        x = F.leaky_relu(self.conv_1(x))
+        x = F.leaky_relu(self.conv_2(x))
         return x
 
 
@@ -152,7 +139,8 @@ class VAE(pl.LightningModule):
         self.classifier = SkipMLP(z_size, h_sizes, N_CLASSES)
 
         # UNet up components
-        self.unpool = SkipMLP(2 * z_size, h_sizes, 2048 * 7 * 7)
+        self.upsample = nn.Upsample(7)
+        self.conv = nn.Conv2d(256, 2048, kernel_size=1)
         up_blocks = []
         up_blocks.append(UpBlock(2048, 1024))
         up_blocks.append(UpBlock(1024, 512))
@@ -164,35 +152,35 @@ class VAE(pl.LightningModule):
         self.out_conv = nn.Conv2d(64, 3, kernel_size=1, stride=1)
 
     def unet_down(self, x):
-        x_embed = self.normalize(x)
-        down_activations = dict()
-        down_activations[f'layer_0'] = x_embed
-        x_embed = self.input_block(x_embed)
-        down_activations[f'layer_1'] = x_embed
-        x_embed = self.input_pool(x_embed)
+        down_embed = self.normalize(x)
+        down_embeds = dict()
+        down_embeds[f'layer_0'] = down_embed
+        down_embed = self.input_block(down_embed)
+        down_embeds[f'layer_1'] = down_embed
+        down_embed = self.input_pool(down_embed)
 
         for i, block in enumerate(self.down_blocks, 2):
-            x_embed = block(x_embed)
+            down_embed = block(down_embed)
             if i == (UNET_DEPTH - 1):
                 continue
-            down_activations[f'layer_{i}'] = x_embed
+            down_embeds[f'layer_{i}'] = down_embed
 
-        x_embed = self.avgpool(x_embed).flatten(start_dim=1)
-        return x_embed, down_activations
+        down_embed = self.avgpool(down_embed).flatten(start_dim=1)
+        return down_embed, down_embeds
 
-    def unet_up(self, z, down_activations):
-        x_embed = self.unpool(z).reshape(-1, 2048, 7, 7)
+    def unet_up(self, z, down_embeds):
+        up_embed = self.upsample(z[:, :, None, None]) # (2 * z_size, 7, 7)
         for i, block in enumerate(self.up_blocks, 1):
             key = f'layer_{UNET_DEPTH - 1 - i}'
-            x_embed = block(x_embed, down_activations[key])
-        x_pred = self.out_conv(x_embed)  # (3, 224, 224)
+            up_embed = block(up_embed, down_embeds[key])
+        x_pred = self.out_conv(up_embed)  # (3, 224, 224)
         return x_pred
 
     def elbo(self, x, y, e):
-        x_embed, down_activations = self.unet_down(x)
+        down_embed, down_embeds = self.unet_down(x)
 
         # z ~ q(z|x,y,e)
-        posterior_dist = self.posterior(x_embed, y, e)
+        posterior_dist = self.posterior(down_embed, y, e)
         z = sample_mvn(posterior_dist)
 
         # log p(y|z_c)
@@ -205,8 +193,8 @@ class VAE(pl.LightningModule):
         kl = D.kl_divergence(posterior_dist, prior_dist).mean()
         prior_norm = (prior_dist.loc ** 2).mean()
 
-        x_pred = self.unet_up(z, down_activations)
-        del down_activations
+        x_pred = self.unet_up(z, down_embeds)
+        del down_embeds
 
         log_prob_x_z = -F.binary_cross_entropy_with_logits(x_pred.flatten(start_dim=1), x.flatten(start_dim=1),
             reduction='none').sum(dim=1).mean()
