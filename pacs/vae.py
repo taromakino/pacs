@@ -144,7 +144,6 @@ class VAE(pl.LightningModule):
             if isinstance(bottleneck, nn.Sequential):
                 down_blocks.append(bottleneck)
         self.down_blocks = nn.ModuleList(down_blocks)
-        self.conv = nn.Conv2d(2048, 2048, 3, 2)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         # VAE components
@@ -153,8 +152,7 @@ class VAE(pl.LightningModule):
         self.classifier = ResidualMLP(z_size, h_sizes, N_CLASSES)
 
         # UNet up components
-        self.unpool = ResidualMLP(2 * z_size, h_sizes, 2048 * 3 * 3)
-        self.tconv = nn.ConvTranspose2d(2048, 2048, 3, 2)
+        self.unpool = ResidualMLP(2 * z_size, h_sizes, 2048 * 7 * 7)
         up_blocks = []
         up_blocks.append(UpBlock(2048, 1024))
         up_blocks.append(UpBlock(1024, 512))
@@ -179,7 +177,6 @@ class VAE(pl.LightningModule):
                 continue
             pre_pools[f'layer_{i}'] = x_embed
 
-        x_embed = self.conv(x_embed) # (2048, 7, 7) -> (2048, 3, 3)
         x_embed = self.avgpool(x_embed).flatten(start_dim=1)
 
         # z_c,z_s ~ q(z_c,z_s|x)
@@ -196,8 +193,7 @@ class VAE(pl.LightningModule):
         kl = D.kl_divergence(posterior_dist, prior_dist).mean()
         prior_norm = (prior_dist.loc ** 2).mean()
 
-        x_embed = self.unpool(z).reshape(-1, 2048, 3, 3)
-        x_embed = self.tconv(x_embed) # (2048, 3, 3) -> (2048, 7, 7)
+        x_embed = self.unpool(z).reshape(-1, 2048, 7, 7)
         for i, block in enumerate(self.up_blocks, 1):
             key = f'layer_{UNET_DEPTH - 1 - i}'
             x_embed = block(x_embed, pre_pools[key])
@@ -234,7 +230,6 @@ class VAE(pl.LightningModule):
                 continue
             pre_pools[f'layer_{i}'] = x_embed
 
-        x_embed = self.conv(x_embed) # (2048, 7, 7) -> (2048, 3, 3)
         x_embed = self.avgpool(x_embed).flatten(start_dim=1)
         return nn.Parameter(self.posterior(x_embed, y, e).loc.detach())
 
@@ -252,7 +247,6 @@ class VAE(pl.LightningModule):
                 continue
             pre_pools[f'layer_{i}'] = x_embed
 
-        x_embed = self.conv(x_embed)  # (2048, 7, 7) -> (2048, 3, 3)
         x_embed = self.avgpool(x_embed).flatten(start_dim=1)
 
         # log q(z|x,y,e)
@@ -263,8 +257,7 @@ class VAE(pl.LightningModule):
         y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y, reduction='none')
 
-        x_embed = self.unpool(z).reshape(-1, 2048, 3, 3)
-        x_embed = self.tconv(x_embed)  # (2048, 3, 3) -> (2048, 7, 7)
+        x_embed = self.unpool(z).reshape(-1, 2048, 7, 7)
         for i, block in enumerate(self.up_blocks, 1):
             key = f'layer_{UNET_DEPTH - 1 - i}'
             x_embed = block(x_embed, pre_pools[key])
