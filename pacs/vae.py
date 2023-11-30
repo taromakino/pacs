@@ -118,7 +118,7 @@ class UpBlock(nn.Module):
 
 
 class VAE(pl.LightningModule):
-    def __init__(self, task, z_size, rank, h_sizes, y_mult, beta, reg_mult, init_sd, lr, weight_decay, lr_infer,
+    def __init__(self, task, z_size, rank, h_sizes, y_mult, beta, reg_mult, init_sd, lr, weight_decay,  lr_infer,
             n_infer_steps):
         super().__init__()
         self.save_hyperparameters()
@@ -163,42 +163,51 @@ class VAE(pl.LightningModule):
         self.up_blocks = nn.ModuleList(up_blocks)
         self.out_conv = nn.Conv2d(64, 3, kernel_size=1, stride=1)
 
-    def elbo(self, x, y, e):
-        x = self.normalize(x)
-        pre_pools = dict()
-        pre_pools[f'layer_0'] = x
-        x = self.input_block(x)
-        pre_pools[f'layer_1'] = x
-        x = self.input_pool(x)
+    def unet_down(self, x):
+        x_embed = self.normalize(x)
+        down_activations = dict()
+        down_activations[f'layer_0'] = x_embed
+        x_embed = self.input_block(x_embed)
+        down_activations[f'layer_1'] = x_embed
+        x_embed = self.input_pool(x_embed)
 
         for i, block in enumerate(self.down_blocks, 2):
-            x = block(x)
+            x_embed = block(x_embed)
             if i == (UNET_DEPTH - 1):
                 continue
-            pre_pools[f'layer_{i}'] = x
+            down_activations[f'layer_{i}'] = x_embed
 
-        x = self.avgpool(x).flatten(start_dim=1)
+        x_embed = self.avgpool(x_embed).flatten(start_dim=1)
+        return x_embed, down_activations
 
-        # z_c,z_s ~ q(z_c,z_s|x)
-        posterior_dist = self.posterior(x, y, e)
+    def unet_up(self, z, down_activations):
+        x_embed = self.unpool(z).reshape(-1, 2048, 7, 7)
+        for i, block in enumerate(self.up_blocks, 1):
+            key = f'layer_{UNET_DEPTH - 1 - i}'
+            x_embed = block(x_embed, down_activations[key])
+        x_pred = self.out_conv(x_embed)  # (3, 224, 224)
+        return x_pred
+
+    def elbo(self, x, y, e):
+        x_embed, down_activations = self.unet_down(x)
+
+        # z ~ q(z|x,y,e)
+        posterior_dist = self.posterior(x_embed, y, e)
         z = sample_mvn(posterior_dist)
-        z_c, z_s = torch.chunk(z, 2, dim=1)
 
-        # E_q(z_c|x)[log p(y|z_c)]
+        # log p(y|z_c)
+        z_c, z_s = torch.chunk(z, 2, dim=1)
         y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y)
 
-        # KL(q(z_c,z_s|x) || p(z_c|e)p(z_s|y,e))
+        # KL(posterior||prior)
         prior_dist = self.prior(y, e)
         kl = D.kl_divergence(posterior_dist, prior_dist).mean()
         prior_norm = (prior_dist.loc ** 2).mean()
 
-        x = self.unpool(z).reshape(-1, 2048, 7, 7)
-        for i, block in enumerate(self.up_blocks, 1):
-            key = f'layer_{UNET_DEPTH - 1 - i}'
-            x = block(x, pre_pools[key])
-        x_pred = self.out_conv(x)  # (3, 224, 224)
-        del pre_pools
+        x_pred = self.unet_up(z, down_activations)
+        del down_activations
+
         log_prob_x_z = -F.binary_cross_entropy_with_logits(x_pred.flatten(start_dim=1), x.flatten(start_dim=1),
             reduction='none').sum(dim=1).mean()
         return log_prob_x_z, log_prob_y_zc, kl, prior_norm
@@ -222,52 +231,25 @@ class VAE(pl.LightningModule):
         batch_size = len(x)
         y = torch.full((batch_size,), y_value, dtype=torch.long, device=self.device)
         e = torch.full((batch_size,), e_value, dtype=torch.long, device=self.device)
-        x = self.normalize(x)
-        pre_pools = dict()
-        pre_pools[f'layer_0'] = x
-        x = self.input_block(x)
-        pre_pools[f'layer_1'] = x
-        x = self.input_pool(x)
 
-        for i, block in enumerate(self.down_blocks, 2):
-            x = block(x)
-            if i == (UNET_DEPTH - 1):
-                continue
-            pre_pools[f'layer_{i}'] = x
-
-        x = self.avgpool(x).flatten(start_dim=1)
-        return nn.Parameter(self.posterior(x, y, e).loc.detach())
+        x_embed, down_activations = self.unet_down(x)
+        del down_activations
+        return nn.Parameter(self.posterior(x_embed, y, e).loc.detach())
 
     def classify_loss(self, x, y, e, z):
-        x = self.normalize(x)
-        pre_pools = dict()
-        pre_pools[f'layer_0'] = x
-        x = self.input_block(x)
-        pre_pools[f'layer_1'] = x
-        x = self.input_pool(x)
-
-        for i, block in enumerate(self.down_blocks, 2):
-            x = block(x)
-            if i == (UNET_DEPTH - 1):
-                continue
-            pre_pools[f'layer_{i}'] = x
-
-        x = self.avgpool(x).flatten(start_dim=1)
+        x_embed, down_activations = self.unet_down(x)
 
         # log q(z|x,y,e)
-        log_prob_z_xye = self.posterior(x, y, e).log_prob(z)
+        log_prob_z_xye = self.posterior(x_embed, y, e).log_prob(z)
 
-        # E_q(z_c|x)[log p(y|z_c)]
+        # log p(y|z_c)
         z_c, z_s = torch.chunk(z, 2, dim=1)
         y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y, reduction='none')
 
-        x = self.unpool(z).reshape(-1, 2048, 7, 7)
-        for i, block in enumerate(self.up_blocks, 1):
-            key = f'layer_{UNET_DEPTH - 1 - i}'
-            x = block(x, pre_pools[key])
-        x_pred = self.out_conv(x)  # (3, 224, 224)
-        del pre_pools
+        # log p(x|z)
+        x_pred = self.unet_up(z, down_activations)
+        del down_activations
         log_prob_x_z = -F.binary_cross_entropy_with_logits(x_pred.flatten(start_dim=1), x.flatten(start_dim=1),
             reduction='none').sum(dim=1)
         loss = -log_prob_x_z - self.y_mult * log_prob_y_zc - log_prob_z_xye
