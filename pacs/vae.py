@@ -170,6 +170,7 @@ class VAE(pl.LightningModule):
 
     def unet_up(self, z, down_embeds):
         up_embed = self.upsample(z[:, :, None, None]) # (2 * z_size, 7, 7)
+        up_embed = self.conv(up_embed) # (2048, 7, 7)
         for i, block in enumerate(self.up_blocks, 1):
             key = f'layer_{UNET_DEPTH - 1 - i}'
             up_embed = block(up_embed, down_embeds[key])
