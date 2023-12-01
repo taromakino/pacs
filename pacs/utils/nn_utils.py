@@ -7,14 +7,6 @@ from torch.utils.data import DataLoader, TensorDataset
 COV_OFFSET = 1e-6
 
 
-class Identity(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x):
-        return x
-
-
 class SkipLinear(nn.Module):
     def __init__(self, input_size, output_size):
         super().__init__()

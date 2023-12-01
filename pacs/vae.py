@@ -105,7 +105,7 @@ class UpBlock(nn.Module):
 
 
 class VAE(pl.LightningModule):
-    def __init__(self, task, z_size, rank, h_sizes, y_mult, beta, reg_mult, init_sd, lr, weight_decay,  lr_infer,
+    def __init__(self, task, z_size, rank, h_sizes, y_mult, beta, reg_mult, init_sd, lr, weight_decay, lr_infer,
             n_infer_steps):
         super().__init__()
         self.save_hyperparameters()

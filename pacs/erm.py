@@ -6,7 +6,6 @@ from data import N_CLASSES
 from torch.optim import Adam
 from torchmetrics import Accuracy
 from torchvision.models import resnet50
-from utils.nn_utils import Identity
 
 
 class ERM(pl.LightningModule):
@@ -17,7 +16,7 @@ class ERM(pl.LightningModule):
         self.weight_decay = weight_decay
         self.resnet = resnet50(weights='IMAGENET1K_V1')
         del self.resnet.fc
-        self.resnet.fc = Identity()
+        self.resnet.fc = nn.Identity()
         self.dropout = nn.Dropout(dropout_prob)
         self.classifier = nn.Linear(2048, N_CLASSES)
         self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
