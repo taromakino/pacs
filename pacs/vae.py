@@ -139,8 +139,7 @@ class VAE(pl.LightningModule):
         self.classifier = SkipMLP(z_size, h_sizes, N_CLASSES)
 
         # UNet up components
-        self.upsample = nn.Upsample(7)
-        self.conv = nn.Conv2d(256, 2048, kernel_size=1)
+        self.upsample = nn.ConvTranspose2d(2 * z_size, 2048, 7)
         up_blocks = []
         up_blocks.append(UpBlock(2048, 1024))
         up_blocks.append(UpBlock(1024, 512))
@@ -169,8 +168,7 @@ class VAE(pl.LightningModule):
         return down_embed, down_embeds
 
     def unet_up(self, z, down_embeds):
-        up_embed = self.upsample(z[:, :, None, None]) # (2 * z_size, 7, 7)
-        up_embed = self.conv(up_embed) # (2048, 7, 7)
+        up_embed = self.upsample(z[:, :, None, None]) # (2048, 7, 7)
         for i, block in enumerate(self.up_blocks, 1):
             key = f'layer_{UNET_DEPTH - 1 - i}'
             up_embed = block(up_embed, down_embeds[key])
