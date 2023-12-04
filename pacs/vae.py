@@ -8,7 +8,7 @@ from data import N_CLASSES, N_ENVS
 from torch.optim import Adam
 from torchmetrics import Accuracy
 from torchvision.models import resnet50
-from utils.nn_utils import SkipMLP, one_hot, arr_to_cov, sample_mvn
+from utils.nn_utils import MLP, one_hot, arr_to_cov, sample_mvn
 
 
 UNET_DEPTH = 6
@@ -20,12 +20,12 @@ class Posterior(nn.Module):
         super().__init__()
         self.z_size = z_size
         self.rank = rank
-        self.mu_causal = SkipMLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
-        self.low_rank_causal = SkipMLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size * rank)
-        self.diag_causal = SkipMLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
-        self.mu_spurious = SkipMLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
-        self.low_rank_spurious = SkipMLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size * rank)
-        self.diag_spurious = SkipMLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
+        self.mu_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
+        self.low_rank_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size * rank)
+        self.diag_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
+        self.mu_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
+        self.low_rank_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size * rank)
+        self.diag_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
 
     def forward(self, x, y, e):
         batch_size = len(x)
@@ -85,35 +85,47 @@ class Prior(nn.Module):
         return D.MultivariateNormal(mu, cov)
 
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, padding=1, kernel_size=3, stride=1):
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.conv = nn.Conv2d(in_channels, out_channels, padding=padding, kernel_size=kernel_size, stride=stride)
-        self.bn = nn.BatchNorm2d(out_channels)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.downsample = nn.Conv2d(in_channels, out_channels, kernel_size=1) if in_channels != out_channels else None
 
     def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x = F.leaky_relu(x)
-        return x
+        identity = x
+        if self.downsample:
+            identity = self.downsample(identity)
+        out = self.conv1(x)
+        out = F.leaky_relu(out)
+        out = self.conv2(out)
+        out += identity
+        out = F.leaky_relu(out)
+        return out
 
 
 class UpBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, up_conv_in_channels=None, up_conv_out_channels=None):
+    def __init__(self, in_channels):
         super().__init__()
-        if up_conv_in_channels is None:
-            up_conv_in_channels = in_channels
-        if up_conv_out_channels is None:
-            up_conv_out_channels = out_channels
-        self.upsample = nn.ConvTranspose2d(up_conv_in_channels, up_conv_out_channels, kernel_size=2, stride=2)
-        self.conv_block_1 = ConvBlock(in_channels, out_channels)
-        self.conv_block_2 = ConvBlock(out_channels, out_channels)
+        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+        self.conv = DoubleConv(in_channels // 2, in_channels // 2)
 
-    def forward(self, up_x, down_x):
-        x = self.upsample(up_x)
-        x = torch.cat([x, down_x], 1)
-        x = self.conv_block_1(x)
-        x = self.conv_block_2(x)
+    def forward(self, x):
+        x = self.up(x)
+        x = self.conv(x)
+        return x
+
+
+class UNetUpBlock(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+        self.conv = DoubleConv(in_channels, in_channels // 2)
+
+    def forward(self, x_up, x_down):
+        x_up = self.up(x_up)
+        x = torch.cat((x_up, x_down), dim=1)
+        x = self.conv(x)
         return x
 
 
@@ -134,53 +146,46 @@ class VAE(pl.LightningModule):
         self.val_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
-        # UNet down components
+        # Down branch
         self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         resnet = resnet50(weights='IMAGENET1K_V1')
-        down_blocks = []
-        self.input_block = nn.Sequential(*list(resnet.children()))[:3]
-        self.input_pool = list(resnet.children())[3]
-        for bottleneck in list(resnet.children()):
-            if isinstance(bottleneck, nn.Sequential):
-                down_blocks.append(bottleneck)
-        self.down_blocks = nn.ModuleList(down_blocks)
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.conv1 = resnet.conv1
+        self.bn1 = resnet.bn1
+        self.maxpool = resnet.maxpool
+        self.layer1 = resnet.layer1
+        self.layer2 = resnet.layer2
+        self.layer3 = resnet.layer3
+        self.layer4 = resnet.layer4
+        self.avgpool = resnet.avgpool
 
         # VAE components
         self.posterior = Posterior(z_size, rank, h_sizes)
         self.prior = Prior(z_size, rank, init_sd)
-        self.classifier = SkipMLP(z_size, h_sizes, N_CLASSES)
+        self.classifier = MLP(z_size, h_sizes, N_CLASSES)
 
-        # UNet up components
-        self.unpool = SkipMLP(2 * z_size, h_sizes, 2048 * 7 * 7)
-        up_blocks = []
-        up_blocks.append(UpBlock(2048, 1024))
-        up_blocks.append(UpBlock(1024, 512))
-        up_blocks.append(UpBlock(512, 256))
-        up_blocks.append(
-            UpBlock(in_channels=128 + 64, out_channels=128, up_conv_in_channels=256, up_conv_out_channels=128))
-        up_blocks.append(UpBlock(in_channels=64 + 3, out_channels=64, up_conv_in_channels=128, up_conv_out_channels=64))
-        self.up_blocks = nn.ModuleList(up_blocks)
-        self.out_conv = nn.Conv2d(64, 3, kernel_size=1, stride=1)
+        # Up branch
+        self.upsample = MLP(2 * z_size, h_sizes, 2048 * 7 * 7)
+        self.up1 = UNetUpBlock(2048)
+        self.up2 = UNetUpBlock(1024)
+        self.up3 = UNetUpBlock(512)
+        self.up4 = UpBlock(256)
+        self.up5 = UpBlock(128)
+        self.outc = nn.Conv2d(64, 3, kernel_size=1)
 
     def elbo(self, x, y, e):
-        x_embed = self.normalize(x)
-        pre_pools = dict()
-        pre_pools[f'layer_0'] = x_embed
-        x_embed = self.input_block(x_embed)
-        pre_pools[f'layer_1'] = x_embed
-        x_embed = self.input_pool(x_embed)
-
-        for i, block in enumerate(self.down_blocks, 2):
-            x_embed = block(x_embed)
-            if i == (UNET_DEPTH - 1):
-                continue
-            pre_pools[f'layer_{i}'] = x_embed
-
-        x_embed = self.avgpool(x_embed).flatten(start_dim=1)
+        x1 = self.normalize(x)
+        x1 = self.conv1(x1)
+        x1 = self.bn1(x1)
+        x1 = F.leaky_relu(x1)
+        x1 = self.maxpool(x1) # (64, 56, 56)
+        x2 = self.layer1(x1)  # (256, 56, 56)
+        x3 = self.layer2(x2)  # (512, 28, 28)
+        x4 = self.layer3(x3)  # (1024, 14, 14)
+        x5 = self.layer4(x4)  # (2048, 7, 7)
+        x6 = self.avgpool(x5).flatten(start_dim=1)
 
         # z_c,z_s ~ q(z_c,z_s|x)
-        posterior_dist = self.posterior(x_embed, y, e)
+        posterior_dist = self.posterior(x6, y, e)
         z = sample_mvn(posterior_dist)
         z_c, z_s = torch.chunk(z, 2, dim=1)
 
@@ -193,12 +198,14 @@ class VAE(pl.LightningModule):
         kl = D.kl_divergence(posterior_dist, prior_dist).mean()
         prior_norm = (prior_dist.loc ** 2).mean()
 
-        x_embed = self.unpool(z).reshape(-1, 2048, 7, 7)
-        for i, block in enumerate(self.up_blocks, 1):
-            key = f'layer_{UNET_DEPTH - 1 - i}'
-            x_embed = block(x_embed, pre_pools[key])
-        x_pred = self.out_conv(x_embed)  # (3, 224, 224)
-        del pre_pools
+        x_pred = self.upsample(z).reshape(-1, 2048, 7, 7)
+        x_pred += x5
+        x_pred = self.up1(x_pred, x4) # (1024, 14, 14)
+        x_pred = self.up2(x_pred, x3) # (512, 28, 28)
+        x_pred = self.up3(x_pred, x2) # (256, 56, 56)
+        x_pred = self.up4(x_pred)
+        x_pred = self.up5(x_pred)
+        x_pred = self.outc(x_pred)
         log_prob_x_z = -F.binary_cross_entropy_with_logits(x_pred.flatten(start_dim=1), x.flatten(start_dim=1),
             reduction='none').sum(dim=1).mean()
         return log_prob_x_z, log_prob_y_zc, kl, prior_norm
@@ -222,52 +229,47 @@ class VAE(pl.LightningModule):
         batch_size = len(x)
         y = torch.full((batch_size,), y_value, dtype=torch.long, device=self.device)
         e = torch.full((batch_size,), e_value, dtype=torch.long, device=self.device)
-        x_embed = self.normalize(x)
-        pre_pools = dict()
-        pre_pools[f'layer_0'] = x_embed
-        x_embed = self.input_block(x_embed)
-        pre_pools[f'layer_1'] = x_embed
-        x_embed = self.input_pool(x_embed)
 
-        for i, block in enumerate(self.down_blocks, 2):
-            x_embed = block(x_embed)
-            if i == (UNET_DEPTH - 1):
-                continue
-            pre_pools[f'layer_{i}'] = x_embed
-
-        x_embed = self.avgpool(x_embed).flatten(start_dim=1)
-        return nn.Parameter(self.posterior(x_embed, y, e).loc.detach())
+        x1 = self.normalize(x)
+        x1 = self.conv1(x1)
+        x1 = self.bn1(x1)
+        x1 = F.leaky_relu(x1)
+        x1 = self.maxpool(x1) # (64, 56, 56)
+        x2 = self.layer1(x1)  # (256, 56, 56)
+        x3 = self.layer2(x2)  # (512, 28, 28)
+        x4 = self.layer3(x3)  # (1024, 14, 14)
+        x5 = self.layer4(x4)  # (2048, 7, 7)
+        x6 = self.avgpool(x5).flatten(start_dim=1)
+        return nn.Parameter(self.posterior(x6, y, e).loc.detach())
 
     def classify_loss(self, x, y, e, z):
-        x_embed = self.normalize(x)
-        pre_pools = dict()
-        pre_pools[f'layer_0'] = x_embed
-        x_embed = self.input_block(x_embed)
-        pre_pools[f'layer_1'] = x_embed
-        x_embed = self.input_pool(x_embed)
-
-        for i, block in enumerate(self.down_blocks, 2):
-            x_embed = block(x_embed)
-            if i == (UNET_DEPTH - 1):
-                continue
-            pre_pools[f'layer_{i}'] = x_embed
-
-        x_embed = self.avgpool(x_embed).flatten(start_dim=1)
+        x1 = self.normalize(x)
+        x1 = self.conv1(x1)
+        x1 = self.bn1(x1)
+        x1 = F.leaky_relu(x1)
+        x1 = self.maxpool(x1) # (64, 56, 56)
+        x2 = self.layer1(x1)  # (256, 56, 56)
+        x3 = self.layer2(x2)  # (512, 28, 28)
+        x4 = self.layer3(x3)  # (1024, 14, 14)
+        x5 = self.layer4(x4)  # (2048, 7, 7)
+        x6 = self.avgpool(x5).flatten(start_dim=1)
 
         # log q(z|x,y,e)
-        log_prob_z_xye = self.posterior(x_embed, y, e).log_prob(z)
+        log_prob_z_xye = self.posterior(x6, y, e).log_prob(z)
 
         # E_q(z_c|x)[log p(y|z_c)]
         z_c, z_s = torch.chunk(z, 2, dim=1)
         y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y, reduction='none')
 
-        x_embed = self.unpool(z).reshape(-1, 2048, 7, 7)
-        for i, block in enumerate(self.up_blocks, 1):
-            key = f'layer_{UNET_DEPTH - 1 - i}'
-            x_embed = block(x_embed, pre_pools[key])
-        x_pred = self.out_conv(x_embed)  # (3, 224, 224)
-        del pre_pools
+        x_pred = self.upsample(z).reshape(-1, 2048, 7, 7)
+        x_pred += x5
+        x_pred = self.up1(x_pred, x4) # (1024, 14, 14)
+        x_pred = self.up2(x_pred, x3) # (512, 28, 28)
+        x_pred = self.up3(x_pred, x2) # (256, 56, 56)
+        x_pred = self.up4(x_pred)
+        x_pred = self.up5(x_pred)
+        x_pred = self.outc(x_pred)
         log_prob_x_z = -F.binary_cross_entropy_with_logits(x_pred.flatten(start_dim=1), x.flatten(start_dim=1),
             reduction='none').sum(dim=1)
         loss = -log_prob_x_z - self.y_mult * log_prob_y_zc - log_prob_z_xye
