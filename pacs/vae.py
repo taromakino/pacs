@@ -199,7 +199,6 @@ class VAE(pl.LightningModule):
         prior_norm = (prior_dist.loc ** 2).mean()
 
         x_pred = self.upsample(z).reshape(-1, 2048, 7, 7)
-        x_pred += x5
         x_pred = self.up1(x_pred)
         x_pred = self.up2(x_pred)
         x_pred = self.up3(x_pred)
