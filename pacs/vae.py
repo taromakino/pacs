@@ -8,7 +8,7 @@ from data import N_CLASSES, N_ENVS
 from torch.optim import Adam
 from torchmetrics import Accuracy
 from torchvision.models import resnet50
-from utils.nn_utils import SkipMLP, one_hot, arr_to_cov, sample_mvn
+from utils.nn_utils import MLP, one_hot, arr_to_cov, sample_mvn
 
 
 UNET_DEPTH = 6
@@ -20,12 +20,12 @@ class Posterior(nn.Module):
         super().__init__()
         self.z_size = z_size
         self.rank = rank
-        self.mu_causal = SkipMLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
-        self.low_rank_causal = SkipMLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size * rank)
-        self.diag_causal = SkipMLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
-        self.mu_spurious = SkipMLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
-        self.low_rank_spurious = SkipMLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size * rank)
-        self.diag_spurious = SkipMLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
+        self.mu_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
+        self.low_rank_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size * rank)
+        self.diag_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
+        self.mu_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
+        self.low_rank_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size * rank)
+        self.diag_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
 
     def forward(self, x, y, e):
         batch_size = len(x)
@@ -86,45 +86,45 @@ class Prior(nn.Module):
 
 
 class DoubleConv(nn.Module):
-    """(convolution => [BN] => ReLU) * 2"""
-
-    def __init__(self, in_channels, out_channels, mid_channels=None):
-        super().__init__()
-        if not mid_channels:
-            mid_channels = out_channels
-        self.double_conv = nn.Sequential(
-            nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
-        )
-
-    def forward(self, x):
-        return self.double_conv(x)
-
-
-class Down(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.maxpool_conv = nn.Sequential(
-            nn.MaxPool2d(2),
-            DoubleConv(in_channels, out_channels)
-        )
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
+        self.downsample = nn.Conv2d(in_channels, out_channels, kernel_size=1) if in_channels != out_channels else None
 
     def forward(self, x):
-        return self.maxpool_conv(x)
+        identity = x
+        if self.downsample:
+            identity = self.downsample(identity)
+        out = self.conv1(x)
+        out = F.leaky_relu(out)
+        out = self.conv2(out)
+        out += identity
+        out = F.leaky_relu(out)
+        return out
 
 
-class Up(nn.Module):
-    def __init__(self, in_channels, out_channels):
+class UpBlock(nn.Module):
+    def __init__(self, in_channels):
         super().__init__()
-        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
-        self.conv = DoubleConv(out_channels, out_channels)
+        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+        self.conv = DoubleConv(in_channels // 2, in_channels // 2)
 
     def forward(self, x):
         x = self.up(x)
+        x = self.conv(x)
+        return x
+
+
+class UNetUpBlock(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+        self.conv = DoubleConv(in_channels, in_channels // 2)
+
+    def forward(self, x_up, x_down):
+        x_up = self.up(x_up)
+        x = torch.cat((x_up, x_down), dim=1)
         x = self.conv(x)
         return x
 
@@ -161,15 +161,15 @@ class VAE(pl.LightningModule):
         # VAE components
         self.posterior = Posterior(z_size, rank, h_sizes)
         self.prior = Prior(z_size, rank, init_sd)
-        self.classifier = SkipMLP(z_size, h_sizes, N_CLASSES)
+        self.classifier = MLP(z_size, h_sizes, N_CLASSES)
 
         # Up branch
-        self.upsample = SkipMLP(2 * z_size, h_sizes, 2048 * 7 * 7)
-        self.up1 = Up(2048, 1024)
-        self.up2 = Up(1024, 512)
-        self.up3 = Up(512, 256)
-        self.up4 = Up(256, 128)
-        self.up5 = Up(128, 64)
+        self.upsample = MLP(2 * z_size, h_sizes, 2048 * 7 * 7)
+        self.up1 = UNetUpBlock(2048)
+        self.up2 = UNetUpBlock(1024)
+        self.up3 = UNetUpBlock(512)
+        self.up4 = UpBlock(256)
+        self.up5 = UpBlock(128)
         self.outc = nn.Conv2d(64, 3, kernel_size=1)
 
     def elbo(self, x, y, e):
@@ -177,11 +177,11 @@ class VAE(pl.LightningModule):
         x1 = self.conv1(x1)
         x1 = self.bn1(x1)
         x1 = F.leaky_relu(x1)
-        x1 = self.maxpool(x1)
-        x2 = self.layer1(x1)
-        x3 = self.layer2(x2)
-        x4 = self.layer3(x3)
-        x5 = self.layer4(x4)  # (2048, 7 ,7)
+        x1 = self.maxpool(x1) # (64, 56, 56)
+        x2 = self.layer1(x1)  # (256, 56, 56)
+        x3 = self.layer2(x2)  # (512, 28, 28)
+        x4 = self.layer3(x3)  # (1024, 14, 14)
+        x5 = self.layer4(x4)  # (2048, 7, 7)
         x6 = self.avgpool(x5).flatten(start_dim=1)
 
         # z_c,z_s ~ q(z_c,z_s|x)
@@ -199,13 +199,13 @@ class VAE(pl.LightningModule):
         prior_norm = (prior_dist.loc ** 2).mean()
 
         x_pred = self.upsample(z).reshape(-1, 2048, 7, 7)
-        x_pred = self.up1(x_pred)
-        x_pred = self.up2(x_pred)
-        x_pred = self.up3(x_pred)
+        x_pred += x5
+        x_pred = self.up1(x_pred, x4) # (1024, 14, 14)
+        x_pred = self.up2(x_pred, x3) # (512, 28, 28)
+        x_pred = self.up3(x_pred, x2) # (256, 56, 56)
         x_pred = self.up4(x_pred)
         x_pred = self.up5(x_pred)
         x_pred = self.outc(x_pred)
-
         log_prob_x_z = -F.binary_cross_entropy_with_logits(x_pred.flatten(start_dim=1), x.flatten(start_dim=1),
             reduction='none').sum(dim=1).mean()
         return log_prob_x_z, log_prob_y_zc, kl, prior_norm
@@ -234,11 +234,11 @@ class VAE(pl.LightningModule):
         x1 = self.conv1(x1)
         x1 = self.bn1(x1)
         x1 = F.leaky_relu(x1)
-        x1 = self.maxpool(x1)
-        x2 = self.layer1(x1)
-        x3 = self.layer2(x2)
-        x4 = self.layer3(x3)
-        x5 = self.layer4(x4)  # (2048, 7 ,7)
+        x1 = self.maxpool(x1) # (64, 56, 56)
+        x2 = self.layer1(x1)  # (256, 56, 56)
+        x3 = self.layer2(x2)  # (512, 28, 28)
+        x4 = self.layer3(x3)  # (1024, 14, 14)
+        x5 = self.layer4(x4)  # (2048, 7, 7)
         x6 = self.avgpool(x5).flatten(start_dim=1)
         return nn.Parameter(self.posterior(x6, y, e).loc.detach())
 
@@ -247,11 +247,11 @@ class VAE(pl.LightningModule):
         x1 = self.conv1(x1)
         x1 = self.bn1(x1)
         x1 = F.leaky_relu(x1)
-        x1 = self.maxpool(x1)
-        x2 = self.layer1(x1)
-        x3 = self.layer2(x2)
-        x4 = self.layer3(x3)
-        x5 = self.layer4(x4)  # (2048, 7 ,7)
+        x1 = self.maxpool(x1) # (64, 56, 56)
+        x2 = self.layer1(x1)  # (256, 56, 56)
+        x3 = self.layer2(x2)  # (512, 28, 28)
+        x4 = self.layer3(x3)  # (1024, 14, 14)
+        x5 = self.layer4(x4)  # (2048, 7, 7)
         x6 = self.avgpool(x5).flatten(start_dim=1)
 
         # log q(z|x,y,e)
@@ -264,9 +264,9 @@ class VAE(pl.LightningModule):
 
         x_pred = self.upsample(z).reshape(-1, 2048, 7, 7)
         x_pred += x5
-        x_pred = self.up1(x_pred)
-        x_pred = self.up2(x_pred)
-        x_pred = self.up3(x_pred)
+        x_pred = self.up1(x_pred, x4) # (1024, 14, 14)
+        x_pred = self.up2(x_pred, x3) # (512, 28, 28)
+        x_pred = self.up3(x_pred, x2) # (256, 56, 56)
         x_pred = self.up4(x_pred)
         x_pred = self.up5(x_pred)
         x_pred = self.outc(x_pred)
