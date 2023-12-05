@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, TensorDataset
 COV_OFFSET = 1e-6
 
 
-class MLP(nn.Module):
+class SkipMLP(nn.Module):
     def __init__(self, input_size, h_sizes, output_size):
         super().__init__()
         module_list = []

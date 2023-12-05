@@ -1,32 +1,25 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
-import torchvision.transforms as transforms
 from data import N_CLASSES
+from vae import IMG_ENCODE_SIZE, EncoderCNN
 from torch.optim import Adam
 from torchmetrics import Accuracy
-from torchvision.models import resnet50
 
 
 class ERM(pl.LightningModule):
-    def __init__(self, lr, weight_decay, dropout_prob):
+    def __init__(self, lr, weight_decay):
         super().__init__()
         self.save_hyperparameters()
         self.lr = lr
         self.weight_decay = weight_decay
-        self.resnet = resnet50(weights='IMAGENET1K_V1')
-        del self.resnet.fc
-        self.resnet.fc = nn.Identity()
-        self.dropout = nn.Dropout(dropout_prob)
-        self.classifier = nn.Linear(2048, N_CLASSES)
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.encoder_cnn = EncoderCNN()
+        self.classifier = nn.Linear(IMG_ENCODE_SIZE, N_CLASSES)
         self.val_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
     def forward(self, x, y, e):
-        x = self.normalize(x)
-        x = self.resnet(x)
-        x = self.dropout(x)
+        x = self.encoder_cnn(x)
         y_pred = self.classifier(x)
         return y_pred, y
 

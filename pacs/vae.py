@@ -1,34 +1,37 @@
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.distributions as D
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as transforms
 from data import N_CLASSES, N_ENVS
+from encoder_cnn import IMG_ENCODE_SIZE, EncoderCNN
+from decoder_cnn import DecoderCNN
 from torch.optim import Adam
 from torchmetrics import Accuracy
-from torchvision.models import resnet50
-from utils.nn_utils import MLP, one_hot, arr_to_cov, sample_mvn
+from utils.nn_utils import SkipMLP, one_hot, arr_to_cov
 
 
-UNET_DEPTH = 6
-IMG_EMBED_SIZE = 2048
+IMG_DECODE_SHAPE = (24, 7, 7)
+IMG_DECODE_SIZE = np.prod(IMG_DECODE_SHAPE)
 
 
-class Posterior(nn.Module):
+class Encoder(nn.Module):
     def __init__(self, z_size, rank, h_sizes):
         super().__init__()
         self.z_size = z_size
         self.rank = rank
-        self.mu_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
-        self.low_rank_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size * rank)
-        self.diag_causal = MLP(IMG_EMBED_SIZE + N_ENVS, h_sizes, z_size)
-        self.mu_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
-        self.low_rank_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size * rank)
-        self.diag_spurious = MLP(IMG_EMBED_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
+        self.encoder_cnn = EncoderCNN()
+        self.mu_causal = SkipMLP(IMG_ENCODE_SIZE + N_ENVS, h_sizes, z_size)
+        self.low_rank_causal = SkipMLP(IMG_ENCODE_SIZE + N_ENVS, h_sizes, z_size * rank)
+        self.diag_causal = SkipMLP(IMG_ENCODE_SIZE + N_ENVS, h_sizes, z_size)
+        self.mu_spurious = SkipMLP(IMG_ENCODE_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
+        self.low_rank_spurious = SkipMLP(IMG_ENCODE_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size * rank)
+        self.diag_spurious = SkipMLP(IMG_ENCODE_SIZE + N_CLASSES + N_ENVS, h_sizes, z_size)
 
     def forward(self, x, y, e):
         batch_size = len(x)
+        x = self.encoder_cnn(x).view(batch_size, -1)
         y_one_hot = one_hot(y, N_CLASSES)
         e_one_hot = one_hot(e, N_ENVS)
         # Causal
@@ -49,6 +52,19 @@ class Posterior(nn.Module):
         cov[:, :self.z_size, :self.z_size] = cov_causal
         cov[:, self.z_size:, self.z_size:] = cov_spurious
         return D.MultivariateNormal(mu, cov)
+
+
+class Decoder(nn.Module):
+    def __init__(self, z_size, h_sizes):
+        super().__init__()
+        self.mlp = SkipMLP(2 * z_size, h_sizes, IMG_DECODE_SIZE)
+        self.decoder_cnn = DecoderCNN()
+
+    def forward(self, x, z):
+        batch_size = len(x)
+        x_pred = self.mlp(z).view(batch_size, *IMG_DECODE_SHAPE)
+        x_pred = self.decoder_cnn(x_pred).view(batch_size, -1)
+        return -F.binary_cross_entropy_with_logits(x_pred, x.view(batch_size, -1), reduction='none').sum(dim=1)
 
 
 class Prior(nn.Module):
@@ -85,50 +101,6 @@ class Prior(nn.Module):
         return D.MultivariateNormal(mu, cov)
 
 
-class DoubleConv(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super().__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
-        self.downsample = nn.Conv2d(in_channels, out_channels, kernel_size=1) if in_channels != out_channels else None
-
-    def forward(self, x):
-        identity = x
-        if self.downsample:
-            identity = self.downsample(identity)
-        out = self.conv1(x)
-        out = F.leaky_relu(out)
-        out = self.conv2(out)
-        out += identity
-        out = F.leaky_relu(out)
-        return out
-
-
-class UpBlock(nn.Module):
-    def __init__(self, in_channels):
-        super().__init__()
-        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-        self.conv = DoubleConv(in_channels // 2, in_channels // 2)
-
-    def forward(self, x):
-        x = self.up(x)
-        x = self.conv(x)
-        return x
-
-
-class UNetUpBlock(nn.Module):
-    def __init__(self, in_channels):
-        super().__init__()
-        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-        self.conv = DoubleConv(in_channels, in_channels // 2)
-
-    def forward(self, x_up, x_down):
-        x_up = self.up(x_up)
-        x = torch.cat((x_up, x_down), dim=1)
-        x = self.conv(x)
-        return x
-
-
 class VAE(pl.LightningModule):
     def __init__(self, task, z_size, rank, h_sizes, y_mult, beta, reg_mult, init_sd, lr, weight_decay, lr_infer,
             n_infer_steps):
@@ -143,81 +115,42 @@ class VAE(pl.LightningModule):
         self.weight_decay = weight_decay
         self.lr_infer = lr_infer
         self.n_infer_steps = n_infer_steps
+        # q(z_c,z_s|x)
+        self.encoder = Encoder(z_size, rank, h_sizes)
+        # p(x|z_c, z_s)
+        self.decoder = Decoder(z_size, h_sizes)
+        # p(z_c,z_s|y,e)
+        self.prior = Prior(z_size, rank, init_sd)
+        # p(y|z)
+        self.classifier = SkipMLP(z_size, h_sizes, N_CLASSES)
         self.val_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
-        # Down branch
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        resnet = resnet50(weights='IMAGENET1K_V1')
-        self.conv1 = resnet.conv1
-        self.bn1 = resnet.bn1
-        self.maxpool = resnet.maxpool
-        self.layer1 = resnet.layer1
-        self.layer2 = resnet.layer2
-        self.layer3 = resnet.layer3
-        self.layer4 = resnet.layer4
-        self.avgpool = resnet.avgpool
+    def sample_z(self, dist):
+        mu, scale_tril = dist.loc, dist.scale_tril
+        batch_size, z_size = mu.shape
+        epsilon = torch.randn(batch_size, z_size, 1).to(self.device)
+        return mu + torch.bmm(scale_tril, epsilon).squeeze()
 
-        # VAE components
-        self.posterior = Posterior(z_size, rank, h_sizes)
-        self.prior = Prior(z_size, rank, init_sd)
-        self.classifier = MLP(z_size, h_sizes, N_CLASSES)
-
-        # Up branch
-        self.upsample = MLP(2 * z_size, h_sizes, 2048 * 7 * 7)
-        self.up1 = UNetUpBlock(2048)
-        self.up2 = UNetUpBlock(1024)
-        self.up3 = UNetUpBlock(512)
-        self.up4 = UpBlock(256)
-        self.up5 = UpBlock(128)
-        self.outc = nn.Conv2d(64, 3, kernel_size=1)
-
-    def elbo(self, x, y, e):
-        x1 = self.normalize(x)
-        x1 = self.conv1(x1)
-        x1 = self.bn1(x1)
-        x1 = F.leaky_relu(x1)
-        x1 = self.maxpool(x1) # (64, 56, 56)
-        x2 = self.layer1(x1)  # (256, 56, 56)
-        x3 = self.layer2(x2)  # (512, 28, 28)
-        x4 = self.layer3(x3)  # (1024, 14, 14)
-        x5 = self.layer4(x4)  # (2048, 7, 7)
-        x6 = self.avgpool(x5).flatten(start_dim=1)
-
+    def loss(self, x, y, e):
         # z_c,z_s ~ q(z_c,z_s|x)
-        posterior_dist = self.posterior(x6, y, e)
-        z = sample_mvn(posterior_dist)
-        z_c, z_s = torch.chunk(z, 2, dim=1)
-
+        posterior_dist = self.encoder(x, y, e)
+        z = self.sample_z(posterior_dist)
+        # E_q(z_c,z_s|x)[log p(x|z_c,z_s)]
+        log_prob_x_z = self.decoder(x, z).mean()
         # E_q(z_c|x)[log p(y|z_c)]
+        z_c, z_s = torch.chunk(z, 2, dim=1)
         y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y)
-
         # KL(q(z_c,z_s|x) || p(z_c|e)p(z_s|y,e))
         prior_dist = self.prior(y, e)
         kl = D.kl_divergence(posterior_dist, prior_dist).mean()
         prior_norm = (prior_dist.loc ** 2).mean()
-
-        x_pred = self.upsample(z).reshape(-1, 2048, 7, 7)
-        x_pred += x5
-        x_pred = self.up1(x_pred, x4) # (1024, 14, 14)
-        x_pred = self.up2(x_pred, x3) # (512, 28, 28)
-        x_pred = self.up3(x_pred, x2) # (256, 56, 56)
-        x_pred = self.up4(x_pred)
-        x_pred = self.up5(x_pred)
-        x_pred = self.outc(x_pred)
-        log_prob_x_z = -F.binary_cross_entropy_with_logits(x_pred.flatten(start_dim=1), x.flatten(start_dim=1),
-            reduction='none').sum(dim=1).mean()
         return log_prob_x_z, log_prob_y_zc, kl, prior_norm
-
-    def on_train_start(self):
-        for module in self.modules():
-            if isinstance(module, nn.BatchNorm2d):
-                module.eval()
 
     def training_step(self, batch, batch_idx):
         x, y, e = batch
-        log_prob_x_z, log_prob_y_zc, kl, prior_norm = self.elbo(x, y, e)
+        log_prob_x_z, log_prob_y_zc, kl, prior_norm = self.loss(x, y, e)
         loss = -log_prob_x_z - self.y_mult * log_prob_y_zc + self.beta * kl + self.reg_mult * prior_norm
         self.log('train_log_prob_x_z', log_prob_x_z, on_step=False, on_epoch=True)
         self.log('train_log_prob_y_zc', log_prob_y_zc, on_step=False, on_epoch=True)
@@ -229,53 +162,21 @@ class VAE(pl.LightningModule):
         batch_size = len(x)
         y = torch.full((batch_size,), y_value, dtype=torch.long, device=self.device)
         e = torch.full((batch_size,), e_value, dtype=torch.long, device=self.device)
+        return nn.Parameter(self.encoder(x, y, e).loc.detach())
 
-        x1 = self.normalize(x)
-        x1 = self.conv1(x1)
-        x1 = self.bn1(x1)
-        x1 = F.leaky_relu(x1)
-        x1 = self.maxpool(x1) # (64, 56, 56)
-        x2 = self.layer1(x1)  # (256, 56, 56)
-        x3 = self.layer2(x2)  # (512, 28, 28)
-        x4 = self.layer3(x3)  # (1024, 14, 14)
-        x5 = self.layer4(x4)  # (2048, 7, 7)
-        x6 = self.avgpool(x5).flatten(start_dim=1)
-        return nn.Parameter(self.posterior(x6, y, e).loc.detach())
-
-    def classify_loss(self, x, y, e, z):
-        x1 = self.normalize(x)
-        x1 = self.conv1(x1)
-        x1 = self.bn1(x1)
-        x1 = F.leaky_relu(x1)
-        x1 = self.maxpool(x1) # (64, 56, 56)
-        x2 = self.layer1(x1)  # (256, 56, 56)
-        x3 = self.layer2(x2)  # (512, 28, 28)
-        x4 = self.layer3(x3)  # (1024, 14, 14)
-        x5 = self.layer4(x4)  # (2048, 7, 7)
-        x6 = self.avgpool(x5).flatten(start_dim=1)
-
-        # log q(z|x,y,e)
-        log_prob_z_xye = self.posterior(x6, y, e).log_prob(z)
-
-        # E_q(z_c|x)[log p(y|z_c)]
+    def infer_loss(self, x, y, e, z):
+        # log p(x|z_c,z_s)
+        log_prob_x_z = self.decoder(x, z)
+        # log p(y|z_c)
         z_c, z_s = torch.chunk(z, 2, dim=1)
         y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y, reduction='none')
-
-        x_pred = self.upsample(z).reshape(-1, 2048, 7, 7)
-        x_pred += x5
-        x_pred = self.up1(x_pred, x4) # (1024, 14, 14)
-        x_pred = self.up2(x_pred, x3) # (512, 28, 28)
-        x_pred = self.up3(x_pred, x2) # (256, 56, 56)
-        x_pred = self.up4(x_pred)
-        x_pred = self.up5(x_pred)
-        x_pred = self.outc(x_pred)
-        log_prob_x_z = -F.binary_cross_entropy_with_logits(x_pred.flatten(start_dim=1), x.flatten(start_dim=1),
-            reduction='none').sum(dim=1)
+        # log q(z_c,z_s|x,y,e)
+        log_prob_z_xye = self.encoder(x, y, e).log_prob(z)
         loss = -log_prob_x_z - self.y_mult * log_prob_y_zc - log_prob_z_xye
         return loss
 
-    def opt_classify_loss(self, x, y_value, e_value):
+    def opt_infer_loss(self, x, y_value, e_value):
         batch_size = len(x)
         z_param = self.init_z(x, y_value, e_value)
         y = torch.full((batch_size,), y_value, dtype=torch.long, device=self.device)
@@ -283,7 +184,7 @@ class VAE(pl.LightningModule):
         optim = Adam([z_param], lr=self.lr_infer)
         for _ in range(self.n_infer_steps):
             optim.zero_grad()
-            loss = self.classify_loss(x, y, e, z_param)
+            loss = self.infer_loss(x, y, e, z_param)
             loss.mean().backward()
             optim.step()
         return loss.detach().clone()
@@ -293,7 +194,7 @@ class VAE(pl.LightningModule):
         y_candidates = []
         for y_value in range(N_CLASSES):
             for e_value in range(N_ENVS):
-                loss_candidates.append(self.opt_classify_loss(x, y_value, e_value)[:, None])
+                loss_candidates.append(self.opt_infer_loss(x, y_value, e_value)[:, None])
                 y_candidates.append(y_value)
         loss_candidates = torch.hstack(loss_candidates)
         y_candidates = torch.tensor(y_candidates, device=self.device)
