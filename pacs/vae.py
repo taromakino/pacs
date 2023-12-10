@@ -151,14 +151,15 @@ class VAE(pl.LightningModule):
         prior_causal, prior_spurious = self.prior(y, e)
         kl_causal = D.kl_divergence(posterior_causal, prior_causal).mean()
         kl_spurious = D.kl_divergence(posterior_spurious, prior_spurious).mean()
+        kl = kl_causal + kl_spurious
         prior_norm = (torch.hstack((prior_causal.loc, prior_spurious.loc)) ** 2).mean()
-        return log_prob_x_z, log_prob_y_zc, kl_causal, kl_spurious, prior_norm
+        return log_prob_x_z, log_prob_y_zc, kl, prior_norm
 
     def training_step(self, batch, batch_idx):
         x, y, e = batch
-        log_prob_x_z, log_prob_y_zc, kl_causal, kl_spurious, prior_norm = self.loss(x, y, e)
-        kl = kl_causal + kl_spurious
+        log_prob_x_z, log_prob_y_zc, kl, prior_norm = self.loss(x, y, e)
         loss = -log_prob_x_z - self.y_mult * log_prob_y_zc + self.beta * kl + self.reg_mult * prior_norm
+        self.log('train_log_prob_y_zc', log_prob_y_zc, on_step=False, on_epoch=True, add_dataloader_idx=False)
         return loss
 
     def init_z(self, x, y_value, e_value):
@@ -215,13 +216,11 @@ class VAE(pl.LightningModule):
     def validation_step(self, batch, batch_idx, dataloader_idx):
         x, y, e = batch
         if dataloader_idx == 0:
-            log_prob_x_z, log_prob_y_zc, kl_causal, kl_spurious, prior_norm = self.loss(x, y, e)
-            kl = kl_causal + kl_spurious
+            log_prob_x_z, log_prob_y_zc, kl, prior_norm = self.loss(x, y, e)
             loss = -log_prob_x_z - self.y_mult * log_prob_y_zc + self.beta * kl + self.reg_mult * prior_norm
             self.log('val_log_prob_x_z', log_prob_x_z, on_step=False, on_epoch=True, add_dataloader_idx=False)
             self.log('val_log_prob_y_zc', log_prob_y_zc, on_step=False, on_epoch=True, add_dataloader_idx=False)
-            self.log('val_kl_causal', kl_causal, on_step=False, on_epoch=True, add_dataloader_idx=False)
-            self.log('val_kl_spurious', kl_spurious, on_step=False, on_epoch=True, add_dataloader_idx=False)
+            self.log('val_kl', kl, on_step=False, on_epoch=True, add_dataloader_idx=False)
             self.log('val_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
         else:
             assert dataloader_idx == 1
