@@ -12,7 +12,7 @@ from vae import VAE
 
 def make_data(args):
     data_train, data_val, data_test = data.make_data(args.test_env, args.train_ratio, args.batch_size,
-        args.eval_batch_size, args.n_workers, args.n_eval_examples if args.task == Task.VAE else None)
+        args.eval_batch_size, args.n_workers, args.n_test_examples if args.task == Task.VAE else None)
     if args.eval_stage is None:
         data_eval = None
     elif args.eval_stage == EvalStage.TRAIN:
@@ -37,8 +37,8 @@ def make_model(args):
         else:
             return ERM.load_from_checkpoint(ckpt_fpath(args, args.task))
     elif args.task == Task.VAE:
-        return VAE(args.task, args.z_size, args.rank, args.h_sizes, args.y_mult, args.beta, args.reg_mult, args.init_sd,
-            args.lr, args.weight_decay, args.lr_infer, args.n_infer_steps)
+        return VAE(args.task, args.z_size, args.rank, args.h_sizes, args.y_mult, args.beta, args.dropout_prob,
+            args.reg_mult, args.init_sd, args.lr, args.weight_decay, args.lr_infer, args.n_infer_steps)
     else:
         assert args.task == Task.CLASSIFY
         return VAE.load_from_checkpoint(ckpt_fpath(args, Task.VAE), task=args.task)
@@ -53,7 +53,6 @@ def main(args):
             trainer = pl.Trainer(
                 logger=CSVLogger(os.path.join(args.dpath, args.task.value), name='', version=args.seed),
                 callbacks=[
-                    EarlyStopping(monitor='val_acc', mode='max', patience=int(args.early_stop_ratio * args.n_epochs)),
                     ModelCheckpoint(monitor='val_acc', mode='max', filename='best')],
                 max_epochs=args.n_epochs,
                 deterministic=True)
@@ -67,6 +66,8 @@ def main(args):
     elif args.task == Task.VAE:
         trainer = pl.Trainer(
             logger=CSVLogger(os.path.join(args.dpath, args.task.value), name='', version=args.seed),
+            callbacks=[
+                ModelCheckpoint(monitor='val_loss', filename='best')],
             max_epochs=args.n_epochs,
             check_val_every_n_epoch=args.check_val_every_n_epoch,
             num_sanity_val_steps=0,
@@ -93,20 +94,20 @@ if __name__ == '__main__':
     parser.add_argument('--train_ratio', type=int, default=0.9)
     parser.add_argument('--batch_size', type=int, default=96)
     parser.add_argument('--eval_batch_size', type=int, default=256)
-    parser.add_argument('--n_eval_examples', type=int, default=256)
     parser.add_argument('--n_workers', type=int, default=8)
-    parser.add_argument('--n_epochs', type=int, default=120)
-    parser.add_argument('--early_stop_ratio', type=float, default=0.1)
-    parser.add_argument('--check_val_every_n_epoch', type=int, default=50)
+    parser.add_argument('--n_test_examples', type=int, default=256)
     parser.add_argument('--z_size', type=int, default=128)
     parser.add_argument('--rank', type=int, default=64)
     parser.add_argument('--h_sizes', nargs='+', type=int, default=[512, 512])
     parser.add_argument('--y_mult', type=float, default=1)
     parser.add_argument('--beta', type=float, default=1)
+    parser.add_argument('--dropout_prob', type=float, default=0.1)
     parser.add_argument('--reg_mult', type=float, default=1e-5)
-    parser.add_argument('--init_sd', type=float, default=0.01)
+    parser.add_argument('--init_sd', type=float, default=1e-3)
     parser.add_argument('--lr', type=float, default=5e-5)
     parser.add_argument('--weight_decay', type=float, default=1e-5)
     parser.add_argument('--lr_infer', type=float, default=1)
     parser.add_argument('--n_infer_steps', type=int, default=200)
+    parser.add_argument('--n_epochs', type=int, default=120)
+    parser.add_argument('--check_val_every_n_epoch', type=int, default=20)
     main(parser.parse_args())
