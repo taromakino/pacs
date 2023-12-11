@@ -12,7 +12,7 @@ from vae import VAE
 
 def make_data(args):
     data_train, data_val, data_test = data.make_data(args.test_env, args.train_ratio, args.batch_size,
-        args.eval_batch_size, args.n_workers, args.n_test_examples if args.task == Task.VAE else None)
+        args.eval_batch_size, args.n_workers, args.n_test_examples)
     if args.eval_stage is None:
         data_eval = None
     elif args.eval_stage == EvalStage.TRAIN:
@@ -26,7 +26,7 @@ def make_data(args):
 
 
 def ckpt_fpath(args, task):
-    return os.path.join(args.dpath, task.value, f'version_{args.seed}', 'checkpoints', 'best.ckpt')
+    return os.path.join(args.dpath, task.value, f'version_{args.seed}', 'checkpoints', 'last.ckpt')
 
 
 def make_model(args):
