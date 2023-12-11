@@ -226,6 +226,7 @@ class VAE(pl.LightningModule):
             assert dataloader_idx == 1
             with torch.set_grad_enabled(True):
                 loss, y_pred = self.classify(x)
+                self.log('test_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
                 self.test_acc.update(y_pred, y)
 
     def on_validation_epoch_end(self):
