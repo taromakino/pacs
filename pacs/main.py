@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 from argparse import ArgumentParser
 from data import ENVS
 from erm import ERM
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import CSVLogger
 from utils.enums import Task, EvalStage
 from vae import VAE
@@ -56,7 +56,7 @@ def main(args):
                     ModelCheckpoint(monitor='val_acc', mode='max', filename='best')],
                 max_epochs=args.n_epochs,
                 deterministic=True)
-            trainer.fit(model, data_train, data_val)
+            trainer.fit(model, data_train, [data_val, data_test])
         else:
             trainer = pl.Trainer(
                 logger=CSVLogger(os.path.join(args.dpath, args.task.value, args.eval_stage.value), name='', version=args.seed),
