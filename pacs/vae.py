@@ -128,6 +128,7 @@ class VAE(pl.LightningModule):
         # p(y|z)
         self.classifier = SkipMLP(z_size, h_sizes, N_CLASSES)
         self.dropout = nn.Dropout(dropout_prob)
+        self.val_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
     def sample_z(self, dist):
@@ -215,21 +216,18 @@ class VAE(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
         x, y, e = batch
-        if dataloader_idx == 0:
-            log_prob_x_z, log_prob_y_zc, kl, prior_norm = self.loss(x, y, e)
-            loss = -log_prob_x_z - self.y_mult * log_prob_y_zc + self.beta * kl + self.reg_mult * prior_norm
-            self.log('val_log_prob_x_z', log_prob_x_z, on_step=False, on_epoch=True, add_dataloader_idx=False)
-            self.log('val_log_prob_y_zc', log_prob_y_zc, on_step=False, on_epoch=True, add_dataloader_idx=False)
-            self.log('val_kl', kl, on_step=False, on_epoch=True, add_dataloader_idx=False)
-            self.log('val_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
-        else:
-            assert dataloader_idx == 1
-            with torch.set_grad_enabled(True):
-                loss, y_pred = self.classify(x)
+        with torch.set_grad_enabled(True):
+            loss, y_pred = self.classify(x)
+            if dataloader_idx == 0:
+                self.log('val_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
+                self.val_acc.update(y_pred, y)
+            else:
+                assert dataloader_idx == 1
                 self.log('test_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
                 self.test_acc.update(y_pred, y)
 
     def on_validation_epoch_end(self):
+        self.log('val_acc', self.test_acc.compute())
         self.log('test_acc', self.test_acc.compute())
 
     def test_step(self, batch, batch_idx):
