@@ -12,7 +12,7 @@ from vae import VAE
 
 def make_data(args):
     data_train, data_val, data_test = data.make_data(args.test_env, args.train_ratio, args.batch_size,
-        args.eval_batch_size, args.n_workers, args.n_test_examples)
+        args.eval_batch_size, args.n_workers, args.n_test_examples if args.task == Task.VAE else None)
     if args.eval_stage is None:
         data_eval = None
     elif args.eval_stage == EvalStage.TRAIN:
@@ -26,7 +26,7 @@ def make_data(args):
 
 
 def ckpt_fpath(args, task):
-    return os.path.join(args.dpath, task.value, f'version_{args.seed}', 'checkpoints', 'last.ckpt')
+    return os.path.join(args.dpath, task.value, f'version_{args.seed}', 'checkpoints', 'best.ckpt')
 
 
 def make_model(args):
@@ -41,8 +41,7 @@ def make_model(args):
             args.reg_mult, args.init_sd, args.lr, args.weight_decay, args.lr_infer, args.n_infer_steps)
     else:
         assert args.task == Task.CLASSIFY
-        return VAE.load_from_checkpoint(ckpt_fpath(args, Task.VAE), task=args.task, lr_infer=args.lr_infer,
-            n_infer_steps=args.n_infer_steps)
+        return VAE.load_from_checkpoint(ckpt_fpath(args, Task.VAE), task=args.task)
 
 
 def main(args):
@@ -68,7 +67,7 @@ def main(args):
         trainer = pl.Trainer(
             logger=CSVLogger(os.path.join(args.dpath, args.task.value), name='', version=args.seed),
             callbacks=[
-                ModelCheckpoint(save_last=True, save_on_train_epoch_end=True)],
+                ModelCheckpoint(monitor='val_loss', filename='best')],
             max_epochs=args.n_epochs,
             check_val_every_n_epoch=args.check_val_every_n_epoch,
             num_sanity_val_steps=0,
