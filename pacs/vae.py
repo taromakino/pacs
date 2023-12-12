@@ -227,7 +227,7 @@ class VAE(pl.LightningModule):
                 self.test_acc.update(y_pred, y)
 
     def on_validation_epoch_end(self):
-        self.log('val_acc', self.test_acc.compute())
+        self.log('val_acc', self.val_acc.compute())
         self.log('test_acc', self.test_acc.compute())
 
     def test_step(self, batch, batch_idx):
