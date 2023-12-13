@@ -210,20 +210,17 @@ class VAE(pl.LightningModule):
                 y_candidates.append(y_value)
         loss_candidates = torch.hstack(loss_candidates)
         y_candidates = torch.tensor(y_candidates, device=self.device)
-        opt_loss = loss_candidates.min(dim=1)
-        y_pred = y_candidates[opt_loss.indices]
-        return opt_loss.values.mean(), y_pred
+        y_pred = y_candidates[loss_candidates.argmin(dim=1)]
+        return y_pred
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
         x, y, e = batch
         with torch.set_grad_enabled(True):
-            loss, y_pred = self.classify(x)
+            y_pred = self.classify(x)
             if dataloader_idx == 0:
-                self.log('val_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
                 self.val_acc.update(y_pred, y)
             else:
                 assert dataloader_idx == 1
-                self.log('test_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
                 self.test_acc.update(y_pred, y)
 
     def on_validation_epoch_end(self):
@@ -233,7 +230,7 @@ class VAE(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         x, y, e = batch
         with torch.set_grad_enabled(True):
-            loss, y_pred = self.classify(x)
+            y_pred = self.classify(x)
             self.test_acc.update(y_pred, y)
 
     def on_test_epoch_end(self):

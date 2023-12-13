@@ -66,8 +66,6 @@ def main(args):
     elif args.task == Task.VAE:
         trainer = pl.Trainer(
             logger=CSVLogger(os.path.join(args.dpath, args.task.value), name='', version=args.seed),
-            callbacks=[
-                ModelCheckpoint(monitor='val_acc', mode='max', filename='best')],
             max_epochs=args.n_epochs,
             check_val_every_n_epoch=args.check_val_every_n_epoch,
             num_sanity_val_steps=0,
