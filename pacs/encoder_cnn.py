@@ -9,7 +9,7 @@ IMG_ENCODE_SIZE = 400
 class EncoderCNN(nn.Module):
     def __init__(self):
         super().__init__()
-        self.net = regnet_x_400mf()
+        self.net = regnet_x_400mf(weights='IMAGENET1K_V2')
         del self.net.fc
         self.net.fc = nn.Identity()
         self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
