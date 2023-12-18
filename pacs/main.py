@@ -1,9 +1,9 @@
 import data
 import os
 import pytorch_lightning as pl
+import torch
 from argparse import ArgumentParser
 from data import ENVS
-from encoder_cnn import EncoderCNN
 from erm import ERM
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import CSVLogger
@@ -40,7 +40,7 @@ def make_model(args):
     elif args.task == Task.VAE:
         vae = VAE(args.task, args.z_size, args.rank, args.h_sizes, args.y_mult, args.beta, args.dropout_prob,
             args.reg_mult, args.init_sd, args.lr, args.weight_decay, args.lr_infer, args.n_infer_steps)
-        vae.encoder.encoder_cnn.load_state_dict(args.pretrain_fpath)
+        vae.encoder.encoder_cnn.load_state_dict(torch.load(args.pretrain_fpath))
     else:
         assert args.task == Task.CLASSIFY
         return VAE.load_from_checkpoint(ckpt_fpath(args, Task.VAE), task=args.task)
