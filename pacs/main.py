@@ -3,6 +3,7 @@ import os
 import pytorch_lightning as pl
 from argparse import ArgumentParser
 from data import ENVS
+from encoder_cnn import EncoderCNN
 from erm import ERM
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import CSVLogger
@@ -37,8 +38,9 @@ def make_model(args):
         else:
             return ERM.load_from_checkpoint(ckpt_fpath(args, args.task))
     elif args.task == Task.VAE:
-        return VAE(args.task, args.z_size, args.rank, args.h_sizes, args.y_mult, args.beta, args.dropout_prob,
+        vae = VAE(args.task, args.z_size, args.rank, args.h_sizes, args.y_mult, args.beta, args.dropout_prob,
             args.reg_mult, args.init_sd, args.lr, args.weight_decay, args.lr_infer, args.n_infer_steps)
+        vae.encoder.encoder_cnn.load_state_dict(args.pretrain_fpath)
     else:
         assert args.task == Task.CLASSIFY
         return VAE.load_from_checkpoint(ckpt_fpath(args, Task.VAE), task=args.task)
@@ -110,4 +112,5 @@ if __name__ == '__main__':
     parser.add_argument('--n_infer_steps', type=int, default=200)
     parser.add_argument('--n_epochs', type=int, default=100)
     parser.add_argument('--check_val_every_n_epoch', type=int, default=10)
+    parser.add_argument('--pretrain_fpath', type=str)
     main(parser.parse_args())

@@ -1,18 +1,59 @@
+import numpy as np
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.transforms as transforms
-from torchvision.models.regnet import regnet_x_400mf
+from collections import OrderedDict
+from torch import Tensor
+from typing import Tuple
+from torchvision.models.densenet import _DenseBlock, _Transition
 
 
-IMG_ENCODE_SIZE = 400
+IMG_ENCODE_SHAPE = (48, 7, 7)
+IMG_ENCODE_SIZE = np.prod(IMG_ENCODE_SHAPE)
 
 
 class EncoderCNN(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.net = regnet_x_400mf(weights='IMAGENET1K_V2')
-        del self.net.fc
-        self.net.fc = nn.Identity()
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    def __init__(
+        self,
+        growth_rate: int = 8,
+        block_config: Tuple[int, int, int, int] = (3, 3, 3, 3, 3, 3),
+        num_init_features: int = 24,
+        bn_size: int = 4,
+        drop_rate: float = 0,
+        memory_efficient: bool = False,
+    ) -> None:
 
-    def forward(self, x):
-        return self.net(self.normalize(x))
+        super().__init__()
+
+        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self.features = nn.Sequential(
+            OrderedDict(
+                [
+                    ("conv0", nn.Conv2d(3, num_init_features, kernel_size=3, padding=1, bias=False)),
+                    ("norm0", nn.BatchNorm2d(num_init_features)),
+                    ("relu0", nn.ReLU(inplace=True))
+                ]
+            )
+        )
+
+        num_features = num_init_features
+        for i, num_layers in enumerate(block_config):
+            block = _DenseBlock(
+                num_layers=num_layers,
+                num_input_features=num_features,
+                bn_size=bn_size,
+                growth_rate=growth_rate,
+                drop_rate=drop_rate,
+                memory_efficient=memory_efficient,
+            )
+            self.features.add_module("denseblock%d" % (i + 1), block)
+            num_features = num_features + num_layers * growth_rate
+            if i != len(block_config) - 1:
+                trans = _Transition(num_input_features=num_features, num_output_features=num_features // 2)
+                self.features.add_module("transition%d" % (i + 1), trans)
+                num_features = num_features // 2
+
+    def forward(self, x: Tensor) -> Tensor:
+        out = self.features(self.normalize(x))
+        out = F.relu(out)
+        return out
