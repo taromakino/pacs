@@ -95,7 +95,6 @@ def make_data(test_env, train_ratio, batch_size, eval_batch_size, n_workers, n_t
     df_val = df_trainval.iloc[val_idxs]
 
     if n_test_examples is not None:
-        df_val = subsample(rng, df_val, n_test_examples)
         df_test = subsample(rng, df_test, n_test_examples)
 
     data_train = DataLoader(PACSDataset(df_train, True), shuffle=True, pin_memory=True, batch_size=batch_size,

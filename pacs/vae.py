@@ -186,7 +186,7 @@ class VAE(pl.LightningModule):
         z_param = self.init_z(x, y_value, e_value)
         y = torch.full((batch_size,), y_value, dtype=torch.long, device=self.device)
         e = torch.full((batch_size,), e_value, dtype=torch.long, device=self.device)
-        optim = Adam([z_param], lr=self.lr_infer)
+        optim = AdamW([z_param], lr=self.lr_infer)
         for _ in range(self.n_infer_steps):
             optim.zero_grad()
             loss = self.infer_loss(x, y, e, z_param)
