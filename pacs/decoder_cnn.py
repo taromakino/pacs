@@ -1,7 +1,12 @@
+import numpy as np
 import torch.nn as nn
 from torch import Tensor
 from typing import Tuple
 from torchvision.models.densenet import _DenseBlock
+
+
+IMG_DECODE_SHAPE = (24, 7, 7)
+IMG_DECODE_SIZE = np.prod(IMG_DECODE_SHAPE)
 
 
 class _Transition(nn.Sequential):

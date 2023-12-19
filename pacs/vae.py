@@ -1,4 +1,3 @@
-import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.distributions as D
@@ -6,14 +5,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from data import N_CLASSES, N_ENVS
 from encoder_cnn import IMG_ENCODE_SIZE, EncoderCNN
-from decoder_cnn import DecoderCNN
-from torch.optim import Adam
+from decoder_cnn import IMG_DECODE_SHAPE, IMG_DECODE_SIZE, DecoderCNN
+from torch.optim import AdamW
 from torchmetrics import Accuracy
 from utils.nn_utils import SkipMLP, one_hot, arr_to_cov
-
-
-IMG_DECODE_SHAPE = (24, 7, 7)
-IMG_DECODE_SIZE = np.prod(IMG_DECODE_SHAPE)
 
 
 class Encoder(nn.Module):
@@ -236,4 +231,4 @@ class VAE(pl.LightningModule):
         self.log('test_acc', self.test_acc.compute())
 
     def configure_optimizers(self):
-        return Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        return AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
