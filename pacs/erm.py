@@ -15,14 +15,12 @@ class ERM(pl.LightningModule):
         self.lr = lr
         self.weight_decay = weight_decay
         self.encoder_cnn = EncoderCNN()
-        self.downsample = nn.Linear(IMG_ENCODE_SIZE, 128)
-        self.classifier = nn.Linear(128, N_CLASSES)
+        self.classifier = nn.Linear(IMG_ENCODE_SIZE, N_CLASSES)
         self.val_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
     def forward(self, x, y, e):
-        x = torch.relu(self.encoder_cnn(x))
-        x = torch.relu(self.downsample(x))
+        x = self.encoder_cnn(x)
         y_pred = self.classifier(x)
         return y_pred, y
 
