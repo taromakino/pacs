@@ -20,7 +20,8 @@ class ERM(pl.LightningModule):
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
     def forward(self, x, y, e):
-        x = self.encoder_cnn(x)
+        batch_size = len(x)
+        x = self.encoder_cnn(x).view(batch_size, -1)
         y_pred = self.classifier(x)
         return y_pred, y
 
@@ -32,7 +33,6 @@ class ERM(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         y_pred, y = self(*batch)
         loss = F.cross_entropy(y_pred, y)
-        self.log('train_loss', loss, on_step=False, on_epoch=True)
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx):
