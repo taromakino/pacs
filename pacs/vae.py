@@ -101,8 +101,8 @@ class Prior(nn.Module):
 
 
 class VAE(pl.LightningModule):
-    def __init__(self, task, z_size, rank, h_sizes, y_mult, beta, dropout_prob, reg_mult, init_sd, lr, weight_decay,
-            lr_infer, n_infer_steps):
+    def __init__(self, task, z_size, rank, h_sizes, y_mult, beta, reg_mult, init_sd, lr, weight_decay, lr_infer,
+            n_infer_steps):
         super().__init__()
         self.save_hyperparameters()
         self.task = task
@@ -122,7 +122,6 @@ class VAE(pl.LightningModule):
         self.prior = Prior(z_size, rank, init_sd)
         # p(y|z)
         self.classifier = SkipMLP(z_size, h_sizes, N_CLASSES)
-        self.dropout = nn.Dropout(dropout_prob)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
     def sample_z(self, dist):
@@ -140,7 +139,7 @@ class VAE(pl.LightningModule):
         z = torch.hstack((z_c, z_s))
         log_prob_x_z = self.decoder(x, z).mean()
         # E_q(z_c|x)[log p(y|z_c)]
-        y_pred = self.classifier(self.dropout(z_c))
+        y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y)
         # KL(q(z_c,z_s|x) || p(z_c|e)p(z_s|y,e))
         prior_causal, prior_spurious = self.prior(y, e)
@@ -155,6 +154,12 @@ class VAE(pl.LightningModule):
         log_prob_x_z, log_prob_y_zc, kl, prior_norm = self.loss(x, y, e)
         loss = -log_prob_x_z - self.y_mult * log_prob_y_zc + self.beta * kl + self.reg_mult * prior_norm
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        x, y, e = batch
+        log_prob_x_z, log_prob_y_zc, kl, prior_norm = self.loss(x, y, e)
+        loss = -log_prob_x_z - self.y_mult * log_prob_y_zc + self.beta * kl + self.reg_mult * prior_norm
+        self.log('val_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
 
     def init_z(self, x, y_value, e_value):
         batch_size = len(x)
@@ -171,7 +176,7 @@ class VAE(pl.LightningModule):
         log_prob_x_z = self.decoder(x, z)
         # log p(y|z_c)
         z_c, z_s = torch.chunk(z, 2, dim=1)
-        y_pred = self.classifier(self.dropout(z_c))
+        y_pred = self.classifier(z_c)
         log_prob_y_zc = -F.cross_entropy(y_pred, y, reduction='none')
         # log q(z_c,z_s|x,y,e)
         posterior_causal, posterior_spurious = self.encoder(x, y, e)
@@ -205,21 +210,6 @@ class VAE(pl.LightningModule):
         y_candidates = torch.tensor(y_candidates, device=self.device)
         y_pred = y_candidates[loss_candidates.argmin(dim=1)]
         return y_pred
-
-    def validation_step(self, batch, batch_idx, dataloader_idx):
-        x, y, e = batch
-        if dataloader_idx == 0:
-            log_prob_x_z, log_prob_y_zc, kl, prior_norm = self.loss(x, y, e)
-            loss = -log_prob_x_z - self.y_mult * log_prob_y_zc + self.beta * kl + self.reg_mult * prior_norm
-            self.log('val_loss', loss, on_step=False, on_epoch=True, add_dataloader_idx=False)
-        else:
-            assert dataloader_idx == 1
-            with torch.set_grad_enabled(True):
-                y_pred = self.classify(x)
-                self.test_acc.update(y_pred, y)
-
-    def on_validation_epoch_end(self):
-        self.log('test_acc', self.test_acc.compute())
 
     def test_step(self, batch, batch_idx):
         x, y, e = batch
