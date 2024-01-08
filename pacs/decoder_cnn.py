@@ -1,12 +1,7 @@
-import numpy as np
 import torch.nn as nn
 from torch import Tensor
 from typing import Tuple
 from torchvision.models.densenet import _DenseBlock
-
-
-IMG_DECODE_SHAPE = (24, 6, 6)
-IMG_DECODE_SIZE = np.prod(IMG_DECODE_SHAPE)
 
 
 class _Transition(nn.Sequential):
@@ -22,7 +17,7 @@ class DecoderCNN(nn.Module):
     def __init__(
         self,
         growth_rate: int = 8,
-        block_config: Tuple[int, int, int, int] = (3, 3, 3, 3, 3),
+        block_config: Tuple[int, int, int, int] = (3, 3, 3, 3, 3, 3),
         num_init_features: int = 24,
         bn_size: int = 4,
         drop_rate: float = 0,
