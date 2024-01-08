@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from data import N_CLASSES, N_ENVS
 from encoder_cnn import IMG_ENCODE_SIZE, EncoderCNN
 from decoder_cnn import IMG_DECODE_SHAPE, IMG_DECODE_SIZE, DecoderCNN
-from torch.optim import SGD
+from torch.optim import AdamW
 from torchmetrics import Accuracy
 from utils.nn_utils import SkipMLP, one_hot, repeat_batch, arr_to_cov
 
@@ -185,4 +185,4 @@ class VAE(pl.LightningModule):
         self.log('test_acc', self.test_acc.compute())
 
     def configure_optimizers(self):
-        return SGD(self.parameters(), lr=self.lr, momentum=0.9, weight_decay=self.weight_decay)
+        return AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
