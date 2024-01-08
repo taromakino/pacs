@@ -21,7 +21,7 @@ class ERM(pl.LightningModule):
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
     def forward(self, x, y, e):
-        x = self.encoder_cnn(x)
+        x = self.ecnn(x)
         y_pred = self.classifier(x)
         return y_pred, y
 

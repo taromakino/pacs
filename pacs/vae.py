@@ -46,7 +46,7 @@ class Encoder(nn.Module):
         return D.MultivariateNormal(mu, cov)
 
     def forward(self, x, y, e):
-        x = self.ecnn(x).flatten(start_dim=1)
+        x = self.ecnn(x)
         parent_dist = self.parent_dist(x)
         child_dist = self.child_dist(x, y, e)
         return parent_dist, child_dist
