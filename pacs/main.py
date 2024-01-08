@@ -85,7 +85,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--task', type=Task, choices=list(Task), required=True)
     parser.add_argument('--eval_stage', type=EvalStage, choices=list(EvalStage))
-    parser.add_argument('--test_env', type=str, choices=list(data.ENVS), required=True)
+    parser.add_argument('--test_env', type=str, choices=data.ENVS, required=True)
     parser.add_argument('--train_ratio', type=int, default=0.9)
     parser.add_argument('--batch_size', type=int, default=96)
     parser.add_argument('--eval_batch_size', type=int, default=256)

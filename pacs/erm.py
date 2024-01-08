@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from data import N_CLASSES
 from encoder_cnn import IMG_ENCODE_SIZE, EncoderCNN
-from torch.optim import AdamW
+from torch.optim import Adam
 from torchmetrics import Accuracy
 
 
@@ -21,10 +21,14 @@ class ERM(pl.LightningModule):
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
     def forward(self, x, y, e):
-        batch_size = len(x)
-        x = self.ecnn(x).view(batch_size, -1)
+        x = self.encoder_cnn(x)
         y_pred = self.classifier(x)
         return y_pred, y
+
+    def on_train_start(self):
+        for module in self.modules():
+            if isinstance(module, nn.BatchNorm2d):
+                module.eval()
 
     def training_step(self, batch, batch_idx):
         y_pred, y = self(*batch)
@@ -51,4 +55,4 @@ class ERM(pl.LightningModule):
         self.log('test_acc', self.test_acc.compute())
 
     def configure_optimizers(self):
-        return AdamW(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        return Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)

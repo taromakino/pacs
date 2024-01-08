@@ -1,6 +1,6 @@
 import torch.nn as nn
 import torchvision.transforms as transforms
-from torchvision.models.resnet import resnet50
+from torchvision.models import resnet50
 
 
 IMG_ENCODE_SIZE = 2048
