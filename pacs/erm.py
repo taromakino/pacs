@@ -1,34 +1,32 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from data import N_CLASSES
-from vae import IMG_ENCODE_SIZE, EncoderCNN
+from encoder_cnn import IMG_ENCODE_SIZE, EncoderCNN
 from torch.optim import AdamW
 from torchmetrics import Accuracy
 
 
 class ERM(pl.LightningModule):
-    def __init__(self, lr, weight_decay):
+    def __init__(self, z_size, lr, weight_decay):
         super().__init__()
         self.save_hyperparameters()
+        self.ecnn = EncoderCNN()
+        self.classifier = nn.Sequential(
+            nn.Linear(IMG_ENCODE_SIZE, z_size),
+            nn.LeakyReLU(),
+            nn.Linear(z_size, N_CLASSES)
+        )
         self.lr = lr
         self.weight_decay = weight_decay
-        self.encoder_cnn = EncoderCNN()
-        self.classifier = nn.Linear(IMG_ENCODE_SIZE, N_CLASSES)
         self.val_acc = Accuracy('multiclass', num_classes=N_CLASSES)
         self.test_acc = Accuracy('multiclass', num_classes=N_CLASSES)
 
     def forward(self, x, y, e):
         batch_size = len(x)
-        x = self.encoder_cnn(x).view(batch_size, -1)
+        x = self.ecnn(x).view(batch_size, -1)
         y_pred = self.classifier(x)
         return y_pred, y
-
-    def on_train_start(self):
-        for module in self.modules():
-            if isinstance(module, nn.BatchNorm2d):
-                module.eval()
 
     def training_step(self, batch, batch_idx):
         y_pred, y = self(*batch)

@@ -37,15 +37,7 @@ class PACSDataset(Dataset):
         return x, y, e
 
 
-def subsample(rng, df, n_eval_examples):
-    if len(df) < n_eval_examples:
-        return df
-    else:
-        idxs = rng.choice(len(df), n_eval_examples, replace=False)
-        return df.iloc[idxs]
-
-
-def make_data(test_env, train_ratio, batch_size, eval_batch_size, n_workers, n_test_examples):
+def make_data(test_env, train_ratio, batch_size, eval_batch_size, n_workers):
     rng = np.random.RandomState(0)
     trainval_envs = [env for env in ENVS if env != test_env]
     dpath = os.path.join(os.environ['DATA_DPATH'], 'PACS')
@@ -84,9 +76,6 @@ def make_data(test_env, train_ratio, batch_size, eval_batch_size, n_workers, n_t
 
     df_train = df_trainval.iloc[train_idxs]
     df_val = df_trainval.iloc[val_idxs]
-
-    if n_test_examples is not None:
-        df_test = subsample(rng, df_test, n_test_examples)
 
     data_train = DataLoader(PACSDataset(df_train), shuffle=True, pin_memory=True, batch_size=batch_size,
         num_workers=n_workers)
